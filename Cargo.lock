@@ -6007,6 +6007,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "warpgate-protocol-remoterun"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "warpgate-common",
+]
+
+[[package]]
 name = "warpgate-protocol-ssh"
 version = "0.18.0"
 dependencies = [
@@ -6029,6 +6045,7 @@ dependencies = [
  "warpgate-common",
  "warpgate-core",
  "warpgate-db-entities",
+ "warpgate-protocol-remoterun",
  "zeroize",
 ]
 

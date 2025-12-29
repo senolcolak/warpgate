@@ -25,23 +25,36 @@ pub struct TargetSSHOptions {
 
 #[derive(Debug, Deserialize, Serialize, Clone, Object)]
 pub struct TargetRemoteRunOptions {
+    #[serde(flatten)]
     pub mode: RemoteRunMode,
-    #[serde(default)]
-    pub pre_login_commands: Option<Vec<String>>,
-    #[serde(default)]
-    pub provision_url: Option<String>,
-    #[serde(default)]
-    pub kubeconfig: Option<String>,
-    #[serde(default)]
-    pub pod_selector: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Object, PartialEq, Eq)]
-#[oai(rename_all = "snake_case")]
+#[derive(Debug, Deserialize, Serialize, Clone, Union)]
+#[oai(discriminator_name = "mode", one_of)]
+#[serde(tag = "mode", rename_all = "snake_case")]
 pub enum RemoteRunMode {
-    Bash,
-    Provision,
-    Kubernetes,
+    Bash(RemoteRunBashOptions),
+    Provision(RemoteRunProvisionOptions),
+    Kubernetes(RemoteRunKubernetesOptions),
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Object)]
+pub struct RemoteRunBashOptions {
+    #[serde(flatten)]
+    pub ssh: TargetSSHOptions,
+    #[serde(default)]
+    pub pre_login_commands: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Object)]
+pub struct RemoteRunProvisionOptions {
+    pub provision_url: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Object)]
+pub struct RemoteRunKubernetesOptions {
+    pub kubeconfig: String,
+    pub pod_selector: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Union)]

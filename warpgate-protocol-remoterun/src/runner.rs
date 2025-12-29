@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use std::process::Stdio;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::process::{Child, Command};
 use warpgate_common::{RemoteRunMode, TargetRemoteRunOptions};
 
@@ -14,17 +13,16 @@ impl RemoteRunner {
     }
 
     pub fn get_pre_login_commands(&self) -> Vec<String> {
-        self.options.pre_login_commands.clone().unwrap_or_default()
+        match &self.options.mode {
+            RemoteRunMode::Bash(opts) => opts.pre_login_commands.clone().unwrap_or_default(),
+            _ => vec![],
+        }
     }
 
     pub async fn provision(&self) -> Result<(String, u16, String)> {
-        match self.options.mode {
-            RemoteRunMode::Provision => {
-                let url = self
-                    .options
-                    .provision_url
-                    .as_ref()
-                    .context("Provision URL not set")?;
+        match &self.options.mode {
+            RemoteRunMode::Provision(opts) => {
+                let url = &opts.provision_url;
 
                 let client = reqwest::Client::new();
                 let resp = client
@@ -51,10 +49,10 @@ impl RemoteRunner {
     }
 
     pub async fn start_kubectl(&self) -> Result<Child> {
-        match self.options.mode {
-            RemoteRunMode::Kubernetes => {
-                let kubeconfig = self.options.kubeconfig.as_ref().context("Kubeconfig not set")?;
-                let selector = self.options.pod_selector.as_ref().context("Pod selector not set")?;
+        match &self.options.mode {
+            RemoteRunMode::Kubernetes(opts) => {
+                let kubeconfig = &opts.kubeconfig;
+                let selector = &opts.pod_selector;
 
                 // 1. Find pod name
                 let pod_output = Command::new("kubectl")

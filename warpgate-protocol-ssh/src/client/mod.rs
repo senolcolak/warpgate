@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::Bytes;
 use channel_direct_tcpip::DirectTCPIPChannel;
-use channel_session::SessionChannel;
+use channel_session::{SessionChannel, SessionChannelBackend};
 pub use error::SshClientError;
 use futures::pin_mut;
 use handler::ClientHandler;
@@ -356,7 +356,7 @@ impl RemoteClient {
         let (tx, rx) = unbounded_channel();
         self.channel_pipes.lock().await.insert(id, tx);
 
-        let session_channel = SessionChannel::new(channel, id, rx, self.tx.clone(), self.id);
+        let session_channel = SessionChannel::new(SessionChannelBackend::Russh(channel), id, rx, self.tx.clone(), self.id);
 
         self.child_tasks.push(
             tokio::task::Builder::new()
@@ -421,8 +421,6 @@ impl RemoteClient {
         Ok(false)
     }
 
-    }
-
     async fn connect(&mut self, options: TargetOptions) -> Result<(), ConnectionError> {
         self.target_options = Some(options.clone());
 
@@ -431,10 +429,10 @@ impl RemoteClient {
             TargetOptions::RemoteRun(opt) => {
                 let runner = RemoteRunner::new(opt.clone());
                 match opt.mode {
-                    warpgate_common::RemoteRunMode::Bash => {
-                        return Err(ConnectionError::Internal);
+                    warpgate_common::RemoteRunMode::Bash(ref bash_opts) => {
+                        bash_opts.ssh.clone()
                     }
-                    warpgate_common::RemoteRunMode::Provision => {
+                    warpgate_common::RemoteRunMode::Provision(_) => {
                         let (host, port, username) = runner
                             .provision()
                             .await
@@ -452,7 +450,7 @@ impl RemoteClient {
                             run_after_login: None,
                         }
                     }
-                    warpgate_common::RemoteRunMode::Kubernetes => {
+                    warpgate_common::RemoteRunMode::Kubernetes(_) => {
                          self.set_state(RCState::Connected).map_err(|_| ConnectionError::Internal)?;
                          return Ok(());
                     }
@@ -469,6 +467,22 @@ impl RemoteClient {
         // I need to properly implement `connect` to use the derived `ssh_options`.
         
         let address_str = format!("{}:{}", ssh_options.host, ssh_options.port);
+        info!(address = %address_str, username = &ssh_options.username[..], "Connecting");
+        let address = match address_str
+            .to_socket_addrs()
+            .map_err(ConnectionError::Io)
+            .and_then(|mut x| x.next().ok_or(ConnectionError::Resolve))
+        {
+            Ok(address) => address,
+            Err(error) => {
+                error!(?error, address=%address_str, "Cannot resolve target address");
+                self.set_disconnected();
+                return Err(error);
+            }
+        };
+
+        let algos = if ssh_options.allow_insecure_algos.unwrap_or(false) {
+            Preferred {
                 kex: Cow::Borrowed(&[
                     kex::MLKEM768X25519_SHA256,
                     kex::CURVE25519,
@@ -749,7 +763,7 @@ impl RemoteClient {
 
     async fn open_shell(&mut self, channel_id: Uuid) -> Result<(), SshClientError> {
         if let Some(TargetOptions::RemoteRun(opt)) = &self.target_options {
-             if opt.mode == warpgate_common::RemoteRunMode::Kubernetes {
+             if let warpgate_common::RemoteRunMode::Kubernetes(_) = opt.mode {
                   let runner = RemoteRunner::new(opt.clone());
                   let child = runner.start_kubectl().await.map_err(|e| SshClientError::Other(e.into()))?;
                   

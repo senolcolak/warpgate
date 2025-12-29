@@ -11,6 +11,8 @@ pub enum SshClientError {
     #[error(transparent)]
     Warpgate(#[from] WarpgateError),
     #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
     Other(Box<dyn Error + Send + Sync>),
 }
 
