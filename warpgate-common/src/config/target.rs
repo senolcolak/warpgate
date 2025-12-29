@@ -19,6 +19,29 @@ pub struct TargetSSHOptions {
     pub allow_insecure_algos: Option<bool>,
     #[serde(default)]
     pub auth: SSHTargetAuth,
+    #[serde(default)]
+     pub run_after_login: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Object)]
+pub struct TargetRemoteRunOptions {
+    pub mode: RemoteRunMode,
+    #[serde(default)]
+    pub pre_login_commands: Option<Vec<String>>,
+    #[serde(default)]
+    pub provision_url: Option<String>,
+    #[serde(default)]
+    pub kubeconfig: Option<String>,
+    #[serde(default)]
+    pub pod_selector: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Object, PartialEq, Eq)]
+#[oai(rename_all = "snake_case")]
+pub enum RemoteRunMode {
+    Bash,
+    Provision,
+    Kubernetes,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Union)]
@@ -140,6 +163,8 @@ pub struct Target {
 pub enum TargetOptions {
     #[serde(rename = "ssh")]
     Ssh(TargetSSHOptions),
+    #[serde(rename = "remote_run")]
+    RemoteRun(TargetRemoteRunOptions),
     #[serde(rename = "http")]
     Http(TargetHTTPOptions),
     #[serde(rename = "mysql")]

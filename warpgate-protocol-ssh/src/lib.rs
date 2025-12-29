@@ -41,17 +41,18 @@ impl ProtocolServer for SSHProtocolServer {
     }
 
     async fn test_target(&self, target: Target) -> Result<(), TargetTestError> {
-        let TargetOptions::Ssh(ssh_options) = target.options else {
+        let options = target.options.clone();
+        if !matches!(options, TargetOptions::Ssh(_)) && !matches!(options, TargetOptions::RemoteRun(_)) {
             return Err(TargetTestError::Misconfigured(
-                "Not an SSH target".to_owned(),
+                "Not an SSH or RemoteRun target".to_owned(),
             ));
-        };
+        }
 
         let mut handles = RemoteClient::create(Uuid::new_v4(), self.services.clone())?;
 
         let _ = handles
             .command_tx
-            .send((RCCommand::Connect(ssh_options), None));
+            .send((RCCommand::Connect(options), None));
 
         while let Some(event) = handles.event_rx.recv().await {
             match event {

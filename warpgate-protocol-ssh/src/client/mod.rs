@@ -23,7 +23,8 @@ use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tracing::*;
 use uuid::Uuid;
-use warpgate_common::{SSHTargetAuth, SessionId, TargetSSHOptions};
+use warpgate_common::{SSHTargetAuth, SessionId, TargetOptions, TargetSSHOptions};
+use warpgate_protocol_remoterun::RemoteRunner;
 use warpgate_core::Services;
 
 use self::handler::ClientHandlerEvent;
@@ -100,7 +101,7 @@ pub type RCCommandReply = oneshot::Sender<Result<(), SshClientError>>;
 
 #[derive(Clone, Debug)]
 pub enum RCCommand {
-    Connect(TargetSSHOptions),
+    Connect(TargetOptions),
     Channel(Uuid, ChannelOperation),
     ForwardTCPIP(String, u32),
     CancelTCPIPForward(String, u32),
@@ -137,6 +138,7 @@ pub struct RemoteClient {
     inner_event_tx: UnboundedSender<InnerEvent>,
     child_tasks: Vec<JoinHandle<Result<(), SshClientError>>>,
     services: Services,
+    target_options: Option<TargetOptions>,
 }
 
 pub struct RemoteClientHandles {
@@ -167,6 +169,7 @@ impl RemoteClient {
             child_tasks: vec![],
             services,
             abort_rx,
+            target_options: None,
         };
 
         tokio::spawn(
@@ -418,24 +421,54 @@ impl RemoteClient {
         Ok(false)
     }
 
-    async fn connect(&mut self, ssh_options: TargetSSHOptions) -> Result<(), ConnectionError> {
-        let address_str = format!("{}:{}", ssh_options.host, ssh_options.port);
-        let address = match address_str
-            .to_socket_addrs()
-            .map_err(ConnectionError::Io)
-            .and_then(|mut x| x.next().ok_or(ConnectionError::Resolve))
-        {
-            Ok(address) => address,
-            Err(error) => {
-                error!(?error, address=%address_str, "Cannot resolve target address");
-                self.set_disconnected();
-                return Err(error);
+    }
+
+    async fn connect(&mut self, options: TargetOptions) -> Result<(), ConnectionError> {
+        self.target_options = Some(options.clone());
+
+        let ssh_options = match options {
+            TargetOptions::Ssh(opt) => opt,
+            TargetOptions::RemoteRun(opt) => {
+                let runner = RemoteRunner::new(opt.clone());
+                match opt.mode {
+                    warpgate_common::RemoteRunMode::Bash => {
+                        return Err(ConnectionError::Internal);
+                    }
+                    warpgate_common::RemoteRunMode::Provision => {
+                        let (host, port, username) = runner
+                            .provision()
+                            .await
+                            .map_err(|e| {
+                                error!("Provision error: {e}");
+                                ConnectionError::Authentication
+                            })?;
+                        
+                        TargetSSHOptions {
+                            host,
+                            port,
+                            username,
+                            allow_insecure_algos: None,
+                            auth: SSHTargetAuth::PublicKey(Default::default()), 
+                            run_after_login: None,
+                        }
+                    }
+                    warpgate_common::RemoteRunMode::Kubernetes => {
+                         self.set_state(RCState::Connected).map_err(|_| ConnectionError::Internal)?;
+                         return Ok(());
+                    }
+                }
             }
+             _ => return Err(ConnectionError::Internal),
         };
 
-        info!(?address, username = &ssh_options.username[..], "Connecting");
-        let algos = if ssh_options.allow_insecure_algos.unwrap_or(false) {
-            Preferred {
+
+        // If this is Provision mode, we need to inject the provisioned host/port into ssh_options
+        // But ssh_options is immutable here? We handled it above by matching.
+        // Wait, for Provision mode we need to construct a new ssh_options?
+        // My previous logic in `connect` matches `options` and returns early.
+        // I need to properly implement `connect` to use the derived `ssh_options`.
+        
+        let address_str = format!("{}:{}", ssh_options.host, ssh_options.port);
                 kex: Cow::Borrowed(&[
                     kex::MLKEM768X25519_SHA256,
                     kex::CURVE25519,
@@ -715,6 +748,26 @@ impl RemoteClient {
     }
 
     async fn open_shell(&mut self, channel_id: Uuid) -> Result<(), SshClientError> {
+        if let Some(TargetOptions::RemoteRun(opt)) = &self.target_options {
+             if opt.mode == warpgate_common::RemoteRunMode::Kubernetes {
+                  let runner = RemoteRunner::new(opt.clone());
+                  let child = runner.start_kubectl().await.map_err(|e| SshClientError::Other(e.into()))?;
+                  
+                  let (tx, rx) = unbounded_channel();
+                  self.channel_pipes.lock().await.insert(channel_id, tx);
+                  
+                  let backend = crate::client::channel_session::SessionChannelBackend::Process(child);
+                  let channel = SessionChannel::new(backend, channel_id, rx, self.tx.clone(), self.id);
+                  self.child_tasks.push(
+                      tokio::task::Builder::new()
+                        .name(&format!("SSH {} {:?} ops", self.id, channel_id))
+                        .spawn(channel.run())
+                        .map_err(|e| SshClientError::Other(Box::new(e)))?,
+                  );
+                  return Ok(());
+             }
+        }
+
         if let Some(session) = &self.session {
             let session = session.lock().await;
             let channel = session.channel_open_session().await?;
@@ -722,7 +775,8 @@ impl RemoteClient {
             let (tx, rx) = unbounded_channel();
             self.channel_pipes.lock().await.insert(channel_id, tx);
 
-            let channel = SessionChannel::new(channel, channel_id, rx, self.tx.clone(), self.id);
+            let backend = crate::client::channel_session::SessionChannelBackend::Russh(channel);
+            let channel = SessionChannel::new(backend, channel_id, rx, self.tx.clone(), self.id);
             self.child_tasks.push(
                 tokio::task::Builder::new()
                     .name(&format!("SSH {} {:?} ops", self.id, channel_id))

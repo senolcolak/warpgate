@@ -50,7 +50,7 @@ use crate::{
 enum TargetSelection {
     None,
     NotFound(String),
-    Found(Target, TargetSSHOptions),
+    Found(Target, TargetOptions),
 }
 
 #[derive(Debug)]
@@ -350,9 +350,9 @@ impl ServerSession {
                 self.disconnect_server().await;
                 anyhow::bail!("Target not found: {}", name);
             }
-            TargetSelection::Found(target, ssh_options) => {
+            TargetSelection::Found(target, options) => {
                 if self.rc_state == RCState::NotInitialized {
-                    self.connect_remote(target, ssh_options).await?;
+                    self.connect_remote(target, options).await?;
                 }
             }
         }
@@ -362,10 +362,10 @@ impl ServerSession {
     async fn connect_remote(
         &mut self,
         target: Target,
-        ssh_options: TargetSSHOptions,
+        options: TargetOptions,
     ) -> Result<()> {
         self.rc_state = RCState::Connecting;
-        self.send_command(RCCommand::Connect(ssh_options))
+        self.send_command(RCCommand::Connect(options))
             .map_err(|_| anyhow::anyhow!("cannot send command"))?;
         self.service_output.show_progress();
         self.emit_service_message(&format!("Selected target: {}", target.name))
@@ -1730,27 +1730,26 @@ impl ServerSession {
                 .list_targets()
                 .await?
                 .iter()
-                .filter_map(|t| match t.options {
-                    TargetOptions::Ssh(ref options) => Some((t, options)),
-                    _ => None,
-                })
-                .find(|(t, _)| t.name == target_name)
-                .map(|(t, opt)| (t.clone(), opt.clone()))
+                .find(|t| t.name == target_name)
+                .filter(|t| matches!(t.options, TargetOptions::Ssh(_) | TargetOptions::RemoteRun(_)))
+                .map(|t| (t.clone(), t.options.clone()))
         };
 
-        let Some((target, mut ssh_options)) = target else {
+        let Some((target, mut options)) = target else {
             self.target = TargetSelection::NotFound(target_name.to_string());
-            warn!("Selected target not found");
+            warn!("Selected target not found or type not supported");
             return Ok(());
         };
 
         // Forward username from the authenticated user to the target, if target has no username
-        if ssh_options.username.is_empty() {
-            ssh_options.username = user_info.username.to_string();
+        if let TargetOptions::Ssh(ssh_options) = &mut options {
+            if ssh_options.username.is_empty() {
+                ssh_options.username = user_info.username.to_string();
+            }
         }
 
         let _ = self.server_handle.lock().await.set_target(&target).await;
-        self.target = TargetSelection::Found(target, ssh_options);
+        self.target = TargetSelection::Found(target, options);
         Ok(())
     }
 

@@ -17,6 +17,7 @@ members = [
     "warpgate-protocol-ssh",
     "warpgate-sso",
     "warpgate-web",
+    "warpgate-protocol-remoterun",
 ]
 default-members = ["warpgate"]
 resolver = "2"
