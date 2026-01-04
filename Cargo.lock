@@ -6109,6 +6109,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "clap",
  "data-encoding",
  "delegate",
  "futures",
